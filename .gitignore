@@ -4,3 +4,9 @@ __pycache__/
 *.pyc
 .DS_Store
 node_modules/
+
+# Large raw data files - too big for GitHub
+data/raw/*.csv
+data/raw/*.xlsx
+data/raw/*.xls
+data/raw/*.xlsm
