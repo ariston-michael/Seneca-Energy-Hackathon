@@ -10,9 +10,6 @@ mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
 const GTA_SW: [number, number] = [-79.85, 43.45]
 const GTA_NE: [number, number] = [-78.8, 44.1]
 const EDGE_MARGIN = 0.05
-const SCENE_W = 80
-const SCENE_D = 60
-const DOWNTOWN: [number, number] = [-79.3832, 43.6532]
 
 interface FacilityProperties {
   name: string
@@ -45,18 +42,6 @@ function clampFlyCoords(lng: number, lat: number): [number, number] {
   ]
 }
 
-function coordToScene(lng: number, lat: number): [number, number] {
-  const tx = (lng - GTA_SW[0]) / (GTA_NE[0] - GTA_SW[0])
-  const tz = 1 - (lat - GTA_SW[1]) / (GTA_NE[1] - GTA_SW[1])
-  return [(tx - 0.5) * SCENE_W, (tz - 0.5) * SCENE_D]
-}
-
-function neighborhoodHeight(lng: number, lat: number): number {
-  const dLng = (lng - DOWNTOWN[0]) * Math.cos((lat * Math.PI) / 180) * 111
-  const dLat = (lat - DOWNTOWN[1]) * 111
-  const distKm = Math.sqrt(dLng * dLng + dLat * dLat)
-  return Math.max(0.4, 10 * Math.exp(-distKm / 8))
-}
 
 function ScoreBar({ value, label }: { value: number; label: string }) {
   const pct = value * 100
@@ -122,6 +107,7 @@ export default function App() {
   const [allFeatures, setAllFeatures] = useState<Facility[]>([])
   const [minScore, setMinScore] = useState(0)
   const [mapLoaded, setMapLoaded] = useState(false)
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; name: string; score: number } | null>(null)
 
   const flyTo = useCallback((f: Facility) => {
     if (!map.current) return
@@ -349,13 +335,13 @@ export default function App() {
 
     const container = cityContainer.current
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color('#0a0f1e')
-    scene.fog = new THREE.FogExp2(0x0a1a3a, 0.006)
+    scene.background = new THREE.Color(0x0a0f1e)
+    scene.fog = new THREE.FogExp2(0x0a0f1e, 0.008)
 
     const w = container.clientWidth
     const h = container.clientHeight
     const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000)
-    camera.position.set(20, 70, 55)
+    camera.position.set(0, 80, 120)
     camera.lookAt(0, 0, 0)
 
     const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -365,131 +351,257 @@ export default function App() {
     container.appendChild(renderer.domElement)
 
     // Lighting
-    scene.add(new THREE.AmbientLight(0x223366, 0.8))
-    const dirLight = new THREE.DirectionalLight(0x4477cc, 1.5)
-    dirLight.position.set(30, 80, 40)
+    scene.add(new THREE.AmbientLight(0xffffff, 0.4))
+    const dirLight = new THREE.DirectionalLight(0x4facfe, 1.2)
+    dirLight.position.set(50, 100, 50)
     scene.add(dirLight)
-    const rimLight = new THREE.DirectionalLight(0x1144aa, 0.4)
-    rimLight.position.set(-40, 20, -40)
-    scene.add(rimLight)
+    const ptLight = new THREE.PointLight(0x3b82f6, 0.8, 200)
+    ptLight.position.set(0, 30, 0)
+    scene.add(ptLight)
+    scene.add(new THREE.HemisphereLight(0x1e3a5f, 0x0a0f1e, 0.5))
 
     // Ground
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(SCENE_W + 10, SCENE_D + 10),
-      new THREE.MeshPhongMaterial({ color: '#050b18', shininess: 5 })
+    const gnd = new THREE.Mesh(
+      new THREE.PlaneGeometry(250, 250),
+      new THREE.MeshPhongMaterial({ color: 0x050b18, shininess: 5 })
     )
-    ground.rotation.x = -Math.PI / 2
-    ground.position.y = -0.1
-    scene.add(ground)
+    gnd.rotation.x = -Math.PI / 2
+    gnd.position.y = -0.1
+    scene.add(gnd)
 
-    // City grid buildings — density driven by distance from downtown
-    const GRID_X = 35
-    const GRID_Z = 28
-    const CELL = 2.0
-    for (let i = 0; i < GRID_X; i++) {
-      for (let j = 0; j < GRID_Z; j++) {
-        const lng = GTA_SW[0] + (i / (GRID_X - 1)) * (GTA_NE[0] - GTA_SW[0])
-        const lat = GTA_SW[1] + (j / (GRID_Z - 1)) * (GTA_NE[1] - GTA_SW[1])
-        const bh = neighborhoodHeight(lng, lat)
-        const color = bh >= 6 ? '#2563eb' : bh >= 2 ? '#1e3a5f' : '#0d1b2a'
-        const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(CELL, bh, CELL),
-          new THREE.MeshPhongMaterial({ color, shininess: 30, specular: 0x224488 })
-        )
-        const tx = i / (GRID_X - 1)
-        const tz = 1 - j / (GRID_Z - 1)
-        mesh.position.set((tx - 0.5) * SCENE_W, bh / 2, (tz - 0.5) * SCENE_D)
-        scene.add(mesh)
+    // Starfield
+    const starCount = 2000
+    const starPos = new Float32Array(starCount * 3)
+    for (let i = 0; i < starCount; i++) {
+      starPos[i * 3]     = (Math.random() - 0.5) * 800
+      starPos[i * 3 + 1] = Math.random() * 300 + 100
+      starPos[i * 3 + 2] = (Math.random() - 0.5) * 800
+    }
+    const starGeo = new THREE.BufferGeometry()
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3))
+    scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.3 })))
+
+    // Neighborhood zones
+    type Zone = { xMin: number; xMax: number; zMin: number; zMax: number; heightMin: number; heightMax: number; color: number; spacing: number }
+    const zones: Zone[] = [
+      { xMin: -5,  xMax: 5,   zMin: -5,  zMax: 5,   heightMin: 15, heightMax: 40, color: 0x2563eb, spacing: 1.4 },
+      { xMin: -10, xMax: 10,  zMin: -15, zMax: -5,  heightMin: 8,  heightMax: 20, color: 0x1e3a5f, spacing: 2.0 },
+      { xMin: -20, xMax: 20,  zMin: -30, zMax: -15, heightMin: 3,  heightMax: 12, color: 0x0d1b2a, spacing: 2.5 },
+      { xMin: -40, xMax: -20, zMin: -10, zMax: 20,  heightMin: 2,  heightMax: 6,  color: 0x0a1628, spacing: 3.5 },
+      { xMin: -30, xMax: -15, zMin: -10, zMax: 10,  heightMin: 4,  heightMax: 15, color: 0x1e3a5f, spacing: 2.5 },
+    ]
+    for (const zone of zones) {
+      const matShort = new THREE.MeshPhongMaterial({ color: zone.color, shininess: 100, specular: 0x224488, emissive: zone.color, emissiveIntensity: 0.2 })
+      const matTall  = new THREE.MeshPhongMaterial({ color: zone.color, shininess: 100, specular: 0x224488, emissive: zone.color, emissiveIntensity: 0.5 })
+      for (let bx = zone.xMin + zone.spacing / 2; bx < zone.xMax; bx += zone.spacing) {
+        for (let bz = zone.zMin + zone.spacing / 2; bz < zone.zMax; bz += zone.spacing) {
+          if (Math.random() > 0.15) {
+            const bh = zone.heightMin + Math.random() * (zone.heightMax - zone.heightMin)
+            const bw = zone.spacing * 0.65 + Math.random() * 0.2
+            const bd = zone.spacing * 0.65 + Math.random() * 0.2
+            const b = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), bh > 10 ? matTall : matShort)
+            b.position.set(bx + (Math.random() - 0.5) * 0.3, bh / 2, bz + (Math.random() - 0.5) * 0.3)
+            scene.add(b)
+          }
+        }
       }
     }
 
-    // Facility spheres
-    const sphereEntries: { mesh: THREE.Mesh; facility: Facility }[] = []
+    // Minor roads (every 2 units)
+    {
+      const pts: number[] = []
+      for (let rx = -60; rx <= 60; rx += 2) { pts.push(rx, 0.05, -60, rx, 0.05, 60) }
+      for (let rz = -60; rz <= 60; rz += 2) { pts.push(-60, 0.05, rz, 60, 0.05, rz) }
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3))
+      scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x0f172a, opacity: 0.3, transparent: true })))
+    }
+
+    // Major roads (every 5 units)
+    {
+      const pts: number[] = []
+      for (let rx = -60; rx <= 60; rx += 5) { pts.push(rx, 0.06, -60, rx, 0.06, 60) }
+      for (let rz = -60; rz <= 60; rz += 5) { pts.push(-60, 0.06, rz, 60, 0.06, rz) }
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3))
+      scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x1e40af, opacity: 0.6, transparent: true })))
+    }
+
+    // Yonge St (x = 0, vertical)
+    {
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0.08, -60, 0, 0.08, 60], 3))
+      scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x3b82f6 })))
+    }
+
+    // Bloor / Danforth (z = -8, horizontal)
+    {
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.Float32BufferAttribute([-60, 0.08, -8, 60, 0.08, -8], 3))
+      scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x2563eb })))
+    }
+
+    // Lake Ontario (z > 15, centred at z = 42)
+    const lakeGeo = new THREE.PlaneGeometry(140, 60, 40, 20)
+    const lakeMesh = new THREE.Mesh(
+      lakeGeo,
+      new THREE.MeshPhongMaterial({ color: 0x0369a1, opacity: 0.7, transparent: true, shininess: 100, specular: 0x4facfe })
+    )
+    lakeMesh.rotation.x = -Math.PI / 2
+    lakeMesh.position.set(0, -0.05, 42)
+    scene.add(lakeMesh)
+    const lakePosAttr = lakeGeo.attributes.position as THREE.BufferAttribute
+
+    // Shoreline glow
+    {
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.Float32BufferAttribute([-70, 0.1, 15, 70, 0.1, 15], 3))
+      scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x38bdf8 })))
+    }
+
+    // Facility cylinders + rings (shared geometry, per-instance material)
+    const cylGeo  = new THREE.CylinderGeometry(0.8, 0.8, 6, 16)
+    const ringGeo = new THREE.RingGeometry(1.2, 2.0, 32)
+
+    type CylEntry = { cylinder: THREE.Mesh; ring: THREE.Mesh; facility: Facility }
+    const cylEntries: CylEntry[] = []
+
     for (const f of allFeatures) {
       const [lng, lat] = f.geometry.coordinates
-      const [sx, sz] = coordToScene(lng, lat)
-      const bh = neighborhoodHeight(lng, lat)
-      const color = getScoreColor(f.properties.final_score)
-      const mat = new THREE.MeshPhongMaterial({
-        color, emissive: color, emissiveIntensity: 0.6, shininess: 80,
-      })
-      const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.5, 8, 8), mat)
-      mesh.position.set(sx, bh + 1.2, sz)
-      scene.add(mesh)
-      sphereEntries.push({ mesh, facility: f })
+      const sx = Math.max(-60, Math.min(60, ((lng - (-79.85)) / 1.05) * 120 - 60))
+      const sz = Math.max(-60, Math.min(60, ((lat - 43.45) / 0.65) * 120 - 60))
+      const color = new THREE.Color(getScoreColor(f.properties.final_score))
+
+      const cyl = new THREE.Mesh(cylGeo, new THREE.MeshStandardMaterial({
+        color, emissive: color, emissiveIntensity: 0.5, roughness: 0.3, metalness: 0.6,
+      }))
+      cyl.position.set(sx, 3, sz)
+      scene.add(cyl)
+
+      const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+        color, opacity: 0.6, transparent: true, side: THREE.DoubleSide,
+      }))
+      ring.rotation.x = -Math.PI / 2
+      ring.position.set(sx, 0.15, sz)
+      scene.add(ring)
+
+      cylEntries.push({ cylinder: cyl, ring, facility: f })
     }
 
     // OrbitControls
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
     controls.dampingFactor = 0.05
-    controls.maxPolarAngle = Math.PI / 2.1
     controls.minDistance = 20
     controls.maxDistance = 200
+    controls.maxPolarAngle = Math.PI / 2.2
+    controls.autoRotate = true
+    controls.autoRotateSpeed = 0.3
+    controls.addEventListener('start', () => { controls.autoRotate = false })
 
-    // Raycaster for click/hover
+    // Raycaster + interaction
     const raycaster = new THREE.Raycaster()
     const mouse = new THREE.Vector2()
-    const sphereMeshes = sphereEntries.map(s => s.mesh)
+    const cylMeshes = cylEntries.map(e => e.cylinder)
+    let hoveredEntry: CylEntry | null = null
 
-    const handleClick = (e: MouseEvent) => {
+    const onMouseMove = (e: MouseEvent) => {
       const rect = renderer.domElement.getBoundingClientRect()
       mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
       raycaster.setFromCamera(mouse, camera)
-      const hits = raycaster.intersectObjects(sphereMeshes)
+      const hits = raycaster.intersectObjects(cylMeshes)
       if (hits.length > 0) {
-        const entry = sphereEntries.find(s => s.mesh === hits[0].object)
-        if (entry) setSelected(entry.facility)
+        const found = cylEntries.find(ce => ce.cylinder === hits[0].object)
+        if (found) {
+          hoveredEntry = found
+          renderer.domElement.style.cursor = 'pointer'
+          const proj = found.cylinder.position.clone().project(camera)
+          setTooltip({
+            x: (proj.x * 0.5 + 0.5) * container.clientWidth,
+            y: (-proj.y * 0.5 + 0.5) * container.clientHeight,
+            name: found.facility.properties.name,
+            score: found.facility.properties.final_score,
+          })
+        }
+      } else {
+        hoveredEntry = null
+        renderer.domElement.style.cursor = 'default'
+        setTooltip(null)
       }
     }
 
-    const handleMouseMove = (e: MouseEvent) => {
+    const onClick = (e: MouseEvent) => {
       const rect = renderer.domElement.getBoundingClientRect()
       mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
       raycaster.setFromCamera(mouse, camera)
-      renderer.domElement.style.cursor =
-        raycaster.intersectObjects(sphereMeshes).length > 0 ? 'pointer' : 'default'
+      const hits = raycaster.intersectObjects(cylMeshes)
+      if (hits.length > 0) {
+        const found = cylEntries.find(ce => ce.cylinder === hits[0].object)
+        if (found) setSelected(found.facility)
+      }
     }
 
-    renderer.domElement.addEventListener('click', handleClick)
-    renderer.domElement.addEventListener('mousemove', handleMouseMove)
+    renderer.domElement.addEventListener('mousemove', onMouseMove)
+    renderer.domElement.addEventListener('click', onClick)
 
-    // Animation loop with sphere pulse
+    // Animation loop
     let rafId: number
     const clock = new THREE.Clock()
     const animate = () => {
       rafId = requestAnimationFrame(animate)
       const t = clock.getElapsedTime()
-      for (const { mesh, facility } of sphereEntries) {
-        const mat = mesh.material as THREE.MeshPhongMaterial
-        mat.emissiveIntensity = 0.3 + 0.5 * Math.abs(Math.sin(t * 1.5 + (facility.properties.final_score / 100) * 5))
+
+      // Lake waves — local Z becomes world Y after rotation.x = -PI/2
+      for (let vi = 0; vi < lakePosAttr.count; vi++) {
+        const vx = lakePosAttr.getX(vi)
+        const vy = lakePosAttr.getY(vi)
+        lakePosAttr.setZ(vi, Math.sin(t * 0.8 + vx * 0.15) * 0.3 + Math.cos(t * 0.5 + vy * 0.12) * 0.2)
       }
+      lakePosAttr.needsUpdate = true
+      lakeGeo.computeVertexNormals()
+
+      // Cylinder + ring animation
+      for (const entry of cylEntries) {
+        const { cylinder, ring, facility } = entry
+        const isHov = entry === hoveredEntry
+        const sp = isHov ? 3.0 : 1.5
+        const phase = facility.properties.final_score * 0.05
+
+        cylinder.rotation.y = t * 0.3
+        const targetSY = isHov ? 1.4 : 1.0
+        cylinder.scale.y += (targetSY - cylinder.scale.y) * 0.1
+        cylinder.position.y = 3 * cylinder.scale.y
+
+        const pf = Math.abs(Math.sin(t * sp + phase))
+        ring.scale.setScalar(1.0 + 0.7 * pf)
+        ;(ring.material as THREE.MeshBasicMaterial).opacity = 0.6 * (1 - 0.55 * pf)
+      }
+
       controls.update()
       renderer.render(scene, camera)
     }
     animate()
 
-    const handleResize = () => {
-      const nw = container.clientWidth
-      const nh = container.clientHeight
-      camera.aspect = nw / nh
+    const onResize = () => {
+      camera.aspect = container.clientWidth / container.clientHeight
       camera.updateProjectionMatrix()
-      renderer.setSize(nw, nh)
+      renderer.setSize(container.clientWidth, container.clientHeight)
     }
-    window.addEventListener('resize', handleResize)
+    window.addEventListener('resize', onResize)
 
     return () => {
       cancelAnimationFrame(rafId)
-      renderer.domElement.removeEventListener('click', handleClick)
-      renderer.domElement.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('resize', handleResize)
+      renderer.domElement.removeEventListener('mousemove', onMouseMove)
+      renderer.domElement.removeEventListener('click', onClick)
+      window.removeEventListener('resize', onResize)
       controls.dispose()
       renderer.dispose()
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement)
+      setTooltip(null)
     }
-  }, [viewMode, allFeatures])
+  }, [viewMode, allFeatures, setSelected, setTooltip])
 
   return (
     <div style={{ width: '100vw', height: '100vh', fontFamily: "'Inter','Segoe UI',sans-serif", position: 'relative', overflow: 'hidden' }}>
@@ -572,7 +684,7 @@ export default function App() {
             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
           }}>Microgrid Mapper</h2>
           <p style={{ margin: 0, fontSize: '11px', color: 'rgba(255,255,255,0.32)', textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>
-            GTA Critical Facilities · Seneca Hackathon 2026
+            GTA Critical Facilities
           </p>
         </div>
 
@@ -737,6 +849,28 @@ export default function App() {
               ? '🟡 Moderate — Assess feasibility within 2 years'
               : '🟢 Lower Priority — Reassess annually'}
           </div>
+        </div>
+      )}
+
+      {/* Floating tooltip for City Model hover */}
+      {tooltip && viewMode === 'city' && (
+        <div style={{
+          position: 'absolute',
+          left: tooltip.x + 14,
+          top: tooltip.y - 36,
+          background: 'rgba(10,15,30,0.92)',
+          border: `1px solid ${getScoreColor(tooltip.score)}55`,
+          borderRadius: '10px',
+          padding: '8px 13px',
+          color: 'white',
+          fontSize: '12px',
+          pointerEvents: 'none',
+          zIndex: 30,
+          backdropFilter: 'blur(12px)',
+          boxShadow: `0 4px 20px rgba(0,0,0,0.6), 0 0 12px ${getScoreColor(tooltip.score)}33`,
+        }}>
+          <div style={{ fontWeight: 600, marginBottom: '3px', maxWidth: '200px', lineHeight: 1.3 }}>{tooltip.name}</div>
+          <div style={{ color: getScoreColor(tooltip.score), fontWeight: 700, fontSize: '13px' }}>{tooltip.score}<span style={{ color: 'rgba(255,255,255,0.35)', fontWeight: 400, fontSize: '10px' }}>/100</span></div>
         </div>
       )}
     </div>
