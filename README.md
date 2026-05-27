@@ -27,3 +27,5 @@ in Peel Region by microgrid viability using:
 - `scoring/` — Python scoring logic
 - `app/` — React/TypeScript dashboard
 - `docs/` — diagrams and documentation
+
+Website Link: https://gridiq-five.vercel.app/
