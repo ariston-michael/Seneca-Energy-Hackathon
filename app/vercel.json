@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/kubra-api/(.*)",
+      "destination": "https://kubra.io/$1"
+    }
+  ]
+}
